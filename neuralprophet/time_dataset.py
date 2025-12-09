@@ -139,7 +139,8 @@ class TimeDataset(Dataset):
         """Computes Fourier series components with the specified frequency and order."""
         self.seasonalities = OrderedDict({})
         dates = self.df_tensors["ds"]
-        t = (dates - torch.tensor(datetime(1900, 1, 1).timestamp())).float() / (3600 * 24.0)
+        # t = (dates - torch.tensor(datetime(1900, 1, 1).timestamp())).float() / (3600 * 24.0)
+        t = dates.float() / (3600 * 24.0)
 
         def compute_fourier_features(t, period, resolution):
             """Provides Fourier series components with the specified frequency and order.
