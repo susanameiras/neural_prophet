@@ -176,6 +176,14 @@ def data_params_definition(
             norm_type=normalize,
         )
 
+    if "cap" in df:
+        # keep in original scale, so no normalization
+        data_params["cap"] = None
+
+    if "floor" in df:
+        # also keep in original scale
+        data_params["floor"] = None
+
     if config_lagged_regressors is not None and config_lagged_regressors.regressors is not None:
         for covar in config_lagged_regressors.regressors.keys():
             if covar not in df.columns:
@@ -375,6 +383,8 @@ def normalize(df, data_params):
     """
     for name in df.columns:
         if name == "ID":
+            continue
+        if name in ("cap", "floor"):
             continue
         if name not in data_params.keys():
             raise ValueError(f"Unexpected column {name} in data")
