@@ -16,7 +16,7 @@ SeasonalityMode = Literal["additive", "multiplicative"]
 
 SeasonalityArgument = Union[Literal["auto"], bool, int]
 
-GrowthMode = Literal["off", "linear", "discontinuous"]
+GrowthMode = Literal["off", "linear", "discontinuous", "logistic"]
 
 CollectMetricsMode = Union[Dict, bool]
 
