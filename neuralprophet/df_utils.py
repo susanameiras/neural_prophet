@@ -219,6 +219,10 @@ def data_params_definition(
                 if condition_name not in df.columns:
                     raise ValueError(f"Seasonality condition {condition_name} not found in DataFrame.")
                 data_params[condition_name] = ShiftScale()
+
+    log.debug("Data Parameters: {}".format(
+        [data_params]
+    ))
     return data_params
 
 
