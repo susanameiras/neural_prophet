@@ -30,7 +30,7 @@ class Trend:
     trend_local_reg: Optional[Union[bool, float]] = None
 
     def __post_init__(self):
-        if self.growth not in ["off", "linear", "discontinuous"]:
+        if self.growth not in ["off", "linear", "discontinuous", "logistic"]:
             log.error(f"Invalid trend growth '{self.growth}'. Set to 'linear'")
             self.growth = "linear"
 
