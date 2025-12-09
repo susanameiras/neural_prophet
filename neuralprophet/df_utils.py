@@ -177,12 +177,10 @@ def data_params_definition(
         )
 
     if "cap" in df:
-        # keep in original scale, so no normalization
-        data_params["cap"] = None
+        data_params["cap"] = ShiftScale(shift=0.0, scale=1.0)
 
     if "floor" in df:
-        # also keep in original scale
-        data_params["floor"] = None
+        data_params["floor"] = ShiftScale(shift=0.0, scale=1.0)
 
     if config_lagged_regressors is not None and config_lagged_regressors.regressors is not None:
         for covar in config_lagged_regressors.regressors.keys():
