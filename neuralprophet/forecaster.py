@@ -516,6 +516,14 @@ class NeuralProphet:
         # AR
         self.config_ar = configure_components.AutoregRession(n_lags=n_lags, ar_reg=ar_reg, ar_layers=ar_layers)
 
+        # cap/floor
+        cap_dict = None
+        floor_dict = None
+        if "cap" in df.columns:
+            cap_dict = df.groupby("ID")["cap"].max().to_dict()
+        if "floor" in df.columns:
+            floor_dict = df.groupby("ID")["floor"].min().to_dict()
+
         # Trend
         self.config_trend = configure_components.Trend(
             growth=growth,
@@ -526,6 +534,8 @@ class NeuralProphet:
             trend_reg_threshold=trend_reg_threshold,
             trend_global_local=trend_global_local,
             trend_local_reg=trend_local_reg,
+            cap=cap_dict,
+            floor=floor_dict,
         )
 
         # Training
