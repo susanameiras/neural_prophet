@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from collections import OrderedDict
-from typing import Callable, List, Optional, Tuple, Type, Union
+from typing import Callable, List, Optional, Tuple, Type, Union, Dict
 
 import matplotlib
 import numpy as np
