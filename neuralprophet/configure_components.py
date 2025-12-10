@@ -28,6 +28,8 @@ class Trend:
     trend_reg_threshold: Optional[Union[bool, float]]
     trend_global_local: str
     trend_local_reg: Optional[Union[bool, float]] = None
+    cap: Optional[Dict[str, float]] = None
+    floor: Optional[Dict[str, float]] = None
 
     def __post_init__(self):
         if self.growth not in ["off", "linear", "discontinuous", "logistic"]:
