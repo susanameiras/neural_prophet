@@ -516,14 +516,6 @@ class NeuralProphet:
         # AR
         self.config_ar = configure_components.AutoregRession(n_lags=n_lags, ar_reg=ar_reg, ar_layers=ar_layers)
 
-        # cap/floor
-        cap_dict = None
-        floor_dict = None
-        if "cap" in df.columns:
-            cap_dict = df.groupby("ID")["cap"].max().to_dict()
-        if "floor" in df.columns:
-            floor_dict = df.groupby("ID")["floor"].min().to_dict()
-
         # Trend
         self.config_trend = configure_components.Trend(
             growth=growth,
@@ -1083,6 +1075,15 @@ class NeuralProphet:
         # Copy df and save list of unique time series IDs (the latter for global-local modelling if enabled)
         df = df.copy(deep=True)
         df, _, _, self.id_list = df_utils.check_multiple_series_id(df)
+
+        # --- NEW: per-ID cap / floor for logistic growth ---
+        if "cap" in df.columns:
+            self.config_trend.cap = df.groupby("ID")["cap"].max().to_dict()
+        if "floor" in df.columns:
+            self.config_trend.floor = df.groupby("ID")["floor"].min().to_dict()
+        # (if caps/floors are missing, config_trend.cap/floor just stay as None)
+
+        # Now do the usual dataframe checks
         df = _check_dataframe(self, df, check_y=True, exogenous=True)
 
         # Infer frequency from data
