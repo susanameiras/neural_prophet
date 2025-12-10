@@ -63,10 +63,7 @@ def get_trend(config, n_forecasts, quantiles, id_list, num_trends_modelled, devi
         # No trend
         return StaticTrend(**args)
         
-    # NEW: pure logistic (no changepoints yet)
     elif config.growth == "logistic":
-        if int(config.n_changepoints) != 0:
-            raise ValueError("Logistic growth currently only implemented for n_changepoints=0.")
         return LogisticTrend(**args)
         
     elif config.growth in ["linear", "discontinuous"]:
