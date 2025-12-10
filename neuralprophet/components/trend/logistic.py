@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import copy
 
 class LogisticTrend(nn.Module):
     def __init__(
