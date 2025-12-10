@@ -62,9 +62,12 @@ def get_trend(config, n_forecasts, quantiles, id_list, num_trends_modelled, devi
     if config.growth == "off":
         # No trend
         return StaticTrend(**args)
-        
-    elif config.growth == "logistic":
-        return LogisticTrend(**args)
+    
+    elif config.growth == 'logistic':
+        if config.trend_global_local == 'global':
+            return GlobalLogisticTrend(**args)
+        else:
+            return LocalLogisticTrend(**args)
         
     elif config.growth in ["linear", "discontinuous"]:
         # Linear trend
