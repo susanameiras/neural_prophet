@@ -41,7 +41,8 @@ class LogisticTrend(nn.Module):
         # self.floor = nn.Parameter(torch.tensor(floors, dtype=torch.float32, device=device), requires_grad=False)
 
         # underlying linear/piecewise-linear trend
-        from .trend import GlobalLinearTrend, GlobalPiecewiseLinearTrend  # adjust import if needed
+        from neuralprophet.components.trend.linear import GlobalLinearTrend, LocalLinearTrend
+        from neuralprophet.components.trend.piecewise_linear import GlobalPiecewiseLinearTrend, LocalPiecewiseLinearTrend
 
         base_trend_cls = GlobalLinearTrend if int(config.n_changepoints) == 0 else GlobalPiecewiseLinearTrend
 
