@@ -10,8 +10,6 @@ class LogisticTrend(nn.Module):
         num_trends_modelled,
         n_forecasts,
         device,
-        cap_dict,
-        floor_dict,
     ):
         super().__init__()
         self.device = device
@@ -19,15 +17,28 @@ class LogisticTrend(nn.Module):
         self.id_list = id_list
         self.id_to_idx = {id_name: i for i, id_name in enumerate(id_list)}
 
+        # --- Read cap/floor from config ---
+        cap_dict = config.cap or {}
+        floor_dict = config.floor or {}
+        
         # store per-ID caps/floors as tensors, default if missing
         caps = []
         floors = []
         for id_name in id_list:
-            caps.append(cap_dict.get(id_name, 1.0))
-            floors.append(floor_dict.get(id_name, 0.0))
+            caps.append(float(cap_dict.get(id_, 1.0)))
+            floors.append(float(floor_dict.get(id_, 0.0)))
 
-        self.cap = nn.Parameter(torch.tensor(caps, dtype=torch.float32, device=device), requires_grad=False)
-        self.floor = nn.Parameter(torch.tensor(floors, dtype=torch.float32, device=device), requires_grad=False)
+        self.register_buffer(
+            "cap",
+            torch.tensor(caps, dtype=torch.float32, device=device)
+        )
+        self.register_buffer(
+            "floor",
+            torch.tensor(floors, dtype=torch.float32, device=device)
+        )
+
+        # self.cap = nn.Parameter(torch.tensor(caps, dtype=torch.float32, device=device), requires_grad=False)
+        # self.floor = nn.Parameter(torch.tensor(floors, dtype=torch.float32, device=device), requires_grad=False)
 
         # underlying linear/piecewise-linear trend
         from .trend import GlobalLinearTrend, GlobalPiecewiseLinearTrend  # adjust import if needed
