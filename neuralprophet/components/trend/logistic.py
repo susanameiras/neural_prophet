@@ -8,7 +8,8 @@ from neuralprophet.components.trend import Trend
 from neuralprophet.components.trend.linear import GlobalLinearTrend, LocalLinearTrend
 from neuralprophet.components.trend.piecewise_linear import GlobalPiecewiseLinearTrend, LocalPiecewiseLinearTrend
 
-"""
+class LogisticTrend(Trend):
+    """
     Logistic trend wrapper around the existing linear / piecewise-linear trends.
 
     We first compute an unconstrained linear trend g(t) using the standard
