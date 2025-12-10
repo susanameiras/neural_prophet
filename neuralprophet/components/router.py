@@ -10,6 +10,7 @@ from neuralprophet.components.seasonality.fourier import (
 from neuralprophet.components.trend.linear import GlobalLinearTrend, LocalLinearTrend
 from neuralprophet.components.trend.piecewise_linear import GlobalPiecewiseLinearTrend, LocalPiecewiseLinearTrend
 from neuralprophet.components.trend.static import StaticTrend
+from neuralprophet.components.trend.logistic import LogisticTrend
 
 
 def get_trend(config, n_forecasts, quantiles, id_list, num_trends_modelled, device):
@@ -61,6 +62,13 @@ def get_trend(config, n_forecasts, quantiles, id_list, num_trends_modelled, devi
     if config.growth == "off":
         # No trend
         return StaticTrend(**args)
+        
+    # NEW: pure logistic (no changepoints yet)
+    elif config.growth == "logistic":
+        if int(config.n_changepoints) != 0:
+            raise ValueError("Logistic growth currently only implemented for n_changepoints=0.")
+        return LogisticTrend(**args)
+        
     elif config.growth in ["linear", "discontinuous"]:
         # Linear trend
         if num_trends_modelled == 1:
@@ -79,26 +87,26 @@ def get_trend(config, n_forecasts, quantiles, id_list, num_trends_modelled, devi
             else:
                 # Piecewise trend
                 return LocalPiecewiseLinearTrend(**args)
-    elif config.growth == "logistic":
-        # NEW: logistic growth trend
-        if num_trends_modelled == 1:
-            # Global trend
-            if int(config.n_changepoints) == 0:
-                # Logistic
-                return GlobalLogisticTrend(**args)
-            else:
-                # Piecewise
-                return GlobalPiecewiseLogisticTrend(**args)
-        else:
-            # Local trend
-            if int(config.n_changepoints) == 0:
-                # Logistic trend
-                return LocalLogisticTrend(**args)
-            else:
-                # Piecewise 
-                return LocalPiecewiseLogisticTrend(**args)
-    else:
-        raise ValueError(f"Growth type {config.growth} is not supported.")
+    # elif config.growth == "logistic":
+    #     # NEW: logistic growth trend
+    #     if num_trends_modelled == 1:
+    #         # Global trend
+    #         if int(config.n_changepoints) == 0:
+    #             # Logistic
+    #             return GlobalLogisticTrend(**args)
+    #         else:
+    #             # Piecewise
+    #             return GlobalPiecewiseLogisticTrend(**args)
+    #     else:
+    #         # Local trend
+    #         if int(config.n_changepoints) == 0:
+    #             # Logistic trend
+    #             return LocalLogisticTrend(**args)
+    #         else:
+    #             # Piecewise 
+    #             return LocalPiecewiseLogisticTrend(**args)
+    # else:
+    #     raise ValueError(f"Growth type {config.growth} is not supported.")
 
 
 def get_future_regressors(config, id_list, quantiles, n_forecasts, device, config_trend_none_bool):
