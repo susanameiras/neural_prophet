@@ -126,22 +126,6 @@ class NeuralProphet:
             Large values (~100) will limit the variability of changepoints.
             Small values (~0.001) will allow changepoints to change faster.
 
-        cap : Optional[Union[float, Dict[str, float]]]
-            Carrying capacity for logistic growth (required when growth='logistic').
-            Options:
-                * float: Single value applied to all series
-                * Dict[str, float]: Per-series capacity {'series_id': cap_value}
-            Example:
-                cap=100.0  # single series
-                cap={'series1': 100.0, 'series2': 200.0}  # multiple series
-        
-        floor : Optional[Union[float, Dict[str, float]]]
-            Floor value for logistic growth (optional, default: 0.0).
-            Same format as cap. Floor must be less than cap for each series.
-            Example:
-                floor=10.0  # single series
-                floor={'series1': 10.0, 'series2': 20.0}  # multiple series
-
         COMMENT
         Seasonality Config
         COMMENT
@@ -449,8 +433,6 @@ class NeuralProphet:
         trend_reg_threshold: Optional[Union[bool, float]] = False,
         trend_global_local: str = "global",
         trend_local_reg: Optional[Union[bool, float]] = False,
-        cap: Optional[Union[float, Dict[str, float]]] = None,
-        floor: Optional[Union[float, Dict[str, float]]] = None,       
         yearly_seasonality: np_types.SeasonalityArgument = "auto",
         yearly_seasonality_glocal_mode: np_types.SeasonalityArgument = "auto",
         weekly_seasonality: np_types.SeasonalityArgument = "auto",
@@ -534,35 +516,7 @@ class NeuralProphet:
         # AR
         self.config_ar = configure_components.AutoregRession(n_lags=n_lags, ar_reg=ar_reg, ar_layers=ar_layers)
 
-        # cap/floor
-        # Convert single values to dictionaries for consistency
-        if cap is not None and not isinstance(cap, dict):
-            # Single value provided - will be applied to default series '__df__'
-            cap = {'__df__': float(cap)}
         
-        if floor is not None and not isinstance(floor, dict):
-            # Single value provided - will be applied to default series '__df__'
-            floor = {'__df__': float(floor)}
-        
-        # Validate logistic growth requirements
-        if growth == "logistic":
-            if cap is None:
-                raise ValueError(
-                    "Logistic growth requires 'cap' parameter to be specified. "
-                    "Provide either a single float value or a dictionary mapping "
-                    "series IDs to capacity values."
-                )
-            
-            # Validate floor < cap if floor is provided
-            if floor is not None:
-                for series_id in cap.keys():
-                    floor_val = floor.get(series_id, 0.0)
-                    cap_val = cap[series_id]
-                    if floor_val >= cap_val:
-                        raise ValueError(
-                            f"Floor ({floor_val}) must be less than cap ({cap_val}) "
-                            f"for series '{series_id}'"
-                        )
         # Trend
         self.config_trend = configure_components.Trend(
             growth=growth,
@@ -642,73 +596,7 @@ class NeuralProphet:
         self.highlight_forecast_step_n = None
         self.true_ar_weights = None
 
-    def set_cap_floor(
-        self, 
-        cap: Optional[Union[float, Dict[str, float]]] = None,
-        floor: Optional[Union[float, Dict[str, float]]] = None
-    ):
-        """
-        Update capacity and floor values for logistic growth.
-        
-        This method allows updating cap/floor values after model initialization,
-        which is useful when working with new data or adjusting saturation limits.
-        
-        Parameters
-        ----------
-        cap : Optional[Union[float, Dict[str, float]]]
-            New carrying capacity value(s)
-        floor : Optional[Union[float, Dict[str, float]]]
-            New floor value(s)
-        
-        Raises
-        ------
-        ValueError
-            If model is not using logistic growth or if floor >= cap
-        
-        Examples
-        --------
-        >>> m = NeuralProphet(growth='logistic', cap=100.0)
-        >>> m.set_cap_floor(cap=150.0, floor=20.0)
-        """
-        if self.config_trend.growth != "logistic":
-            raise ValueError(
-                "set_cap_floor() can only be used with logistic growth. "
-                f"Current growth type: '{self.config_trend.growth}'"
-            )
-        
-        # Convert single values to dictionaries
-        if cap is not None and not isinstance(cap, dict):
-            cap = {'__df__': float(cap)}
-        
-        if floor is not None and not isinstance(floor, dict):
-            floor = {'__df__': float(floor)}
-        
-        # Update config
-        if cap is not None:
-            self.config_trend.cap = cap
-        
-        if floor is not None:
-            self.config_trend.floor = floor
-        
-        # Validate floor < cap
-        if self.config_trend.cap is not None and self.config_trend.floor is not None:
-            for series_id in self.config_trend.cap.keys():
-                floor_val = self.config_trend.floor.get(series_id, 0.0)
-                cap_val = self.config_trend.cap[series_id]
-                if floor_val >= cap_val:
-                    raise ValueError(
-                        f"Floor ({floor_val}) must be less than cap ({cap_val}) "
-                        f"for series '{series_id}'"
-                    )
-        
-        import logging
-        log = logging.getLogger("NP.forecaster")
-        log.info(
-            f"Updated logistic growth parameters: cap={self.config_trend.cap}, "
-            f"floor={self.config_trend.floor}"
-        )
-
-    
+       
     def _create_dataset(self, df, predict_mode, components_stacker=None):
         """Construct dataset from dataframe.
 
