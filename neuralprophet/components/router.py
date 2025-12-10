@@ -61,7 +61,7 @@ def get_trend(config, n_forecasts, quantiles, id_list, num_trends_modelled, devi
     if config.growth == "off":
         # No trend
         return StaticTrend(**args)
-    elif config.growth in ["linear", "discontinuous", "logistic"]:
+    elif config.growth in ["linear", "discontinuous"]:
         # Linear trend
         if num_trends_modelled == 1:
             # Global trend
@@ -79,6 +79,24 @@ def get_trend(config, n_forecasts, quantiles, id_list, num_trends_modelled, devi
             else:
                 # Piecewise trend
                 return LocalPiecewiseLinearTrend(**args)
+    elif config.growth == "logistic":
+        # NEW: logistic growth trend
+        if num_trends_modelled == 1:
+            # Global trend
+            if int(config.n_changepoints) == 0:
+                # Logistic
+                return GlobalLogisticTrend(**args)
+            else:
+                # Piecewise
+                return GlobalPiecewiseLogisticTrend(**args)
+        else:
+            # Local trend
+            if int(config.n_changepoints) == 0:
+                # Logistic trend
+                return LocalLogisticTrend(**args)
+            else:
+                # Piecewise 
+                return LocalPiecewiseLogisticTrend(**args)
     else:
         raise ValueError(f"Growth type {config.growth} is not supported.")
 
