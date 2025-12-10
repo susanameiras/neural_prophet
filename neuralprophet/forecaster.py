@@ -60,7 +60,7 @@ class NeuralProphet:
         COMMENT
         Trend Config
         COMMENT
-        growth : {'off' or 'linear'}, default 'linear'
+        growth : {'off', 'linear', or 'logistic'}, default 'linear'
             Set use of trend growth type.
 
             Options:
