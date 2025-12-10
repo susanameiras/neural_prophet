@@ -526,8 +526,8 @@ class NeuralProphet:
             trend_reg_threshold=trend_reg_threshold,
             trend_global_local=trend_global_local,
             trend_local_reg=trend_local_reg,
-            cap=cap_dict,
-            floor=floor_dict,
+            cap=None,
+            floor=None,
         )
 
         # Training
