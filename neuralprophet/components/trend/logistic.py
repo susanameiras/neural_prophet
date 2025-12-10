@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 import torch
 from torch import nn
 import numpy as np
@@ -25,8 +25,8 @@ class LogisticTrend(Trend):
     
     Expected config attributes:
         - config.growth == "logistic"
-        - config.cap: Dict[str, float] - carrying capacity per time series ID
-        - config.floor: Dict[str, float] - floor value per time series ID (optional, defaults to 0)
+        - config.cap: Dict[str, float] or float - carrying capacity
+        - config.floor: Dict[str, float] or float - floor value (optional, defaults to 0)
         - config.n_changepoints: number of changepoints
         - config.changepoints_range: proportion of history for changepoints
     """
@@ -43,11 +43,11 @@ class LogisticTrend(Trend):
         super().__init__(config, id_list, quantiles, num_trends_modelled, n_forecasts, device)
         
         # Validate that cap is provided
-        self.cap_dict: Dict[str, float] = getattr(config, "cap", None)
-        if self.cap_dict is None:
+        self.cap = getattr(config, "cap", None)
+        if self.cap is None:
             raise ValueError("Logistic growth requires 'cap' to be specified in config")
         
-        self.floor_dict: Dict[str, float] = getattr(config, "floor", {})
+        self.floor = getattr(config, "floor", 0.0)
         
         # Get number of changepoints
         self.n_changepoints = int(getattr(config, "n_changepoints", 0))
@@ -55,115 +55,93 @@ class LogisticTrend(Trend):
         
         # Initialize changepoint locations (fixed, not learnable)
         if self.n_changepoints > 0:
-            # Changepoints uniformly spaced in first changepoints_range of time
-            self.register_buffer(
-                "changepoints",
-                torch.linspace(0, self.changepoints_range, self.n_changepoints, device=device)
-            )
+            # Store as attribute for potential later use, but not as buffer
+            self.changepoints_t = torch.linspace(
+                0, self.changepoints_range, self.n_changepoints + 2, device=device
+            )[1:-1]  # Exclude endpoints
         
         # Determine if we have global or local trends
         self.num_trends_modelled = num_trends_modelled
         self.is_global = (num_trends_modelled == 1)
+        
+        # Store series IDs for mapping
+        self.id_list = id_list
+        self.id_to_idx = {id_: i for i, id_ in enumerate(id_list)}
         
         # Initialize learnable parameters
         self._init_parameters()
     
     def _init_parameters(self):
         """Initialize growth rate k, offset m, and changepoint deltas."""
-        n_params = 1 if self.is_global else self.num_trends_modelled
+        # Base growth rate k - initialize to small positive value
+        # In Prophet, this is initialized based on data, but we use learnable parameter
+        self.k = nn.Parameter(
+            torch.ones(self.num_trends_modelled, 1, device=self.device) * 0.05,
+            requires_grad=True
+        )
         
-        # Base growth rate k (initialized to a reasonable default)
-        # Prophet initializes this based on data, but we'll use a learnable parameter
-        # that the optimizer will adjust
-        self.k = nn.Parameter(torch.ones(n_params, 1, 1, device=self.device) * 0.1)
-        
-        # Offset m (initialized to 0, will be learned)
-        self.m = nn.Parameter(torch.zeros(n_params, 1, 1, device=self.device))
+        # Offset m - initialized to 0
+        self.m = nn.Parameter(
+            torch.zeros(self.num_trends_modelled, 1, device=self.device),
+            requires_grad=True
+        )
         
         # Changepoint rate adjustments (delta)
         if self.n_changepoints > 0:
             self.delta = nn.Parameter(
-                torch.zeros(n_params, self.n_changepoints, 1, device=self.device)
+                torch.zeros(self.num_trends_modelled, self.n_changepoints, device=self.device),
+                requires_grad=True
             )
         else:
             self.delta = None
-    
-    def _get_cap_floor_tensors(self, meta, batch_size: int):
-        """
-        Build cap and floor tensors from metadata.
         
-        Returns:
-            cap: shape (batch_size, 1, 1) or (1, 1, 1) if global
-            floor: shape (batch_size, 1, 1) or (1, 1, 1) if global
-        """
-        if meta is None or "df_name" not in meta:
-            raise ValueError("Logistic trend requires 'df_name' in meta")
-        
-        df_names = meta["df_name"]  # list of series IDs
-        
-        # Get cap values
-        caps = [self.cap_dict.get(name, None) for name in df_names]
-        if None in caps:
-            missing = [name for name, cap in zip(df_names, caps) if cap is None]
-            raise ValueError(f"Missing cap values for series: {missing}")
-        
-        cap_tensor = torch.tensor(caps, dtype=torch.float32, device=self.device).view(-1, 1, 1)
-        
-        # Get floor values (default to 0)
-        floors = [self.floor_dict.get(name, 0.0) for name in df_names]
-        floor_tensor = torch.tensor(floors, dtype=torch.float32, device=self.device).view(-1, 1, 1)
-        
-        return cap_tensor, floor_tensor
-    
-    def _compute_changepoint_indicators(self, t: torch.Tensor):
-        """
-        Compute indicator matrix a(t) where a(t)[i] = 1 if t >= changepoint[i], else 0.
-        
-        Parameters:
-            t: time tensor, shape (batch, n_forecasts)
-        
-        Returns:
-            indicators: shape (batch, n_forecasts, n_changepoints)
-        """
-        if self.n_changepoints == 0:
-            return None
-        
-        # t: (B, T), changepoints: (C,)
-        # Expand for broadcasting: t -> (B, T, 1), changepoints -> (1, 1, C)
-        t_expanded = t.unsqueeze(-1)  # (B, T, 1)
-        cp_expanded = self.changepoints.view(1, 1, -1)  # (1, 1, C)
-        
-        # Indicator: 1 if t >= changepoint, 0 otherwise
-        indicators = (t_expanded >= cp_expanded).float()  # (B, T, C)
-        
-        return indicators
+        # Gamma (offset adjustments for continuity) - computed, not learned
+        if self.n_changepoints > 0:
+            # Initialize gamma as zeros, will be computed in forward if delta is updated
+            self.register_buffer('gamma', torch.zeros_like(self.delta))
+            self._gamma_needs_update = True
+        else:
+            self.gamma = None
+            self._gamma_needs_update = False
     
     def _compute_gamma(self):
         """
         Compute offset adjustments γ to ensure trend continuity at changepoints.
         
         Following Prophet's implementation:
-            γ[j] = (s[j] - m - sum(γ[:j])) * (1 - k[j] / k[j-1])
-        
-        where s[j] is the changepoint location and k[j] is the growth rate after changepoint j.
-        
-        Returns:
-            gamma: shape matching delta
+            For each changepoint s_j:
+                Let k_before = k + sum_{l<j} delta_l
+                Let k_after = k_before + delta_j
+                gamma_j = (s_j - m) * (1 - k_after / k_before)
         """
         if self.delta is None:
             return None
         
-        # For simplicity in NeuralProphet, we can use a simpler formula
-        # This ensures continuity but might differ slightly from Prophet's exact implementation
-        # A full implementation would need to match Prophet's exact gamma calculation
+        # Get device and dtype from delta
+        device = self.delta.device
+        dtype = self.delta.dtype
         
-        # For now, we'll compute gamma to maintain continuity
-        # gamma[j] needs to offset the change in slope at each changepoint
+        # Initialize gamma
         gamma = torch.zeros_like(self.delta)
         
-        # This is a simplified version - Prophet's actual implementation is more complex
-        # and involves cumulative adjustments
-        # You may need to refine this based on exact Prophet behavior
+        # Cumulative delta
+        cum_delta = torch.zeros(self.num_trends_modelled, 1, device=device, dtype=dtype)
+        
+        # Changepoint times
+        s = self.changepoints_t.unsqueeze(0)  # Shape: (1, n_changepoints)
+        
+        # Compute gamma for each changepoint
+        for j in range(self.n_changepoints):
+            k_before = self.k + cum_delta
+            k_after = k_before + self.delta[:, j:j+1]
+            
+            # Avoid division by zero
+            mask = torch.abs(k_before) > 1e-8
+            gamma_j = torch.zeros_like(k_before)
+            gamma_j[mask] = (s[:, j:j+1] - self.m) * (1 - k_after / k_before)[mask]
+            
+            gamma[:, j:j+1] = gamma_j
+            cum_delta = cum_delta + self.delta[:, j:j+1]
         
         return gamma
     
@@ -176,101 +154,117 @@ class LogisticTrend(Trend):
             meta: metadata dict containing 'df_name' for series identification
         
         Returns:
-            trend: shape (batch, n_forecasts, n_quantiles)
+            trend: shape (batch, n_forecasts, 1) or (batch, n_forecasts, n_quantiles)
         """
         batch_size, n_forecasts = t.shape
         
-        # Get cap and floor for each series in batch
-        cap, floor = self._get_cap_floor_tensors(meta, batch_size)
-        
-        # Select appropriate k and m based on global/local
+        # Get parameter indices for each series in batch
         if self.is_global:
-            k = self.k.expand(batch_size, -1, -1)  # (B, 1, 1)
-            m = self.m.expand(batch_size, -1, -1)  # (B, 1, 1)
-            if self.delta is not None:
-                delta = self.delta.expand(batch_size, -1, -1)  # (B, C, 1)
+            param_indices = torch.zeros(batch_size, dtype=torch.long, device=self.device)
         else:
-            # For local trends, we need to map series IDs to parameter indices
-            # This requires maintaining an ID mapping
-            # For now, assume sequential mapping
-            k = self.k  # (num_trends, 1, 1)
-            m = self.m  # (num_trends, 1, 1)
-            delta = self.delta if self.delta is not None else None
+            if meta is None or 'df_name' not in meta:
+                raise ValueError("Local trends require 'df_name' in meta")
+            df_names = meta['df_name']
+            param_indices = torch.tensor(
+                [self.id_to_idx.get(name, 0) for name in df_names],
+                dtype=torch.long,
+                device=self.device
+            )
         
-        # Expand t for broadcasting: (B, T) -> (B, T, 1)
-        t_expanded = t.unsqueeze(-1)
+        # Get cap and floor values for each series
+        if isinstance(self.cap, dict):
+            caps = torch.tensor(
+                [self.cap.get(name, 1.0) for name in df_names],
+                dtype=torch.float32,
+                device=self.device
+            ).view(-1, 1, 1)
+        else:
+            caps = torch.tensor([self.cap], dtype=torch.float32, device=self.device
+                              ).view(1, 1, 1).expand(batch_size, -1, -1)
         
-        # Compute growth rate k(t) = k + a(t)^T δ
+        if isinstance(self.floor, dict):
+            floors = torch.tensor(
+                [self.floor.get(name, 0.0) for name in df_names],
+                dtype=torch.float32,
+                device=self.device
+            ).view(-1, 1, 1)
+        else:
+            floors = torch.tensor([self.floor], dtype=torch.float32, device=self.device
+                                ).view(1, 1, 1).expand(batch_size, -1, -1)
+        
+        # Select parameters for each series
+        k_selected = self.k[param_indices]  # Shape: (batch_size, 1)
+        m_selected = self.m[param_indices]  # Shape: (batch_size, 1)
+        
+        # Reshape t for broadcasting
+        t_reshaped = t.view(batch_size, n_forecasts, 1)  # (B, T, 1)
+        
+        # Initialize k_t and m_t
+        k_t = k_selected.unsqueeze(1).expand(-1, n_forecasts, -1)  # (B, T, 1)
+        m_t = m_selected.unsqueeze(1).expand(-1, n_forecasts, -1)  # (B, T, 1)
+        
+        # Apply changepoint adjustments if needed
         if self.n_changepoints > 0:
-            indicators = self._compute_changepoint_indicators(t)  # (B, T, C)
-            # delta: (B, C, 1) for global, need to handle properly
-            # rate_adjustment: (B, T, 1)
-            if self.is_global:
-                rate_adjustment = torch.matmul(indicators, delta)  # (B, T, 1)
-            else:
-                # For local trends, this needs proper indexing
-                rate_adjustment = torch.matmul(indicators, delta)
+            # Update gamma if delta has changed
+            if self.training or self._gamma_needs_update:
+                self.gamma = self._compute_gamma()
+                self._gamma_needs_update = False
             
-            k_t = k.expand(-1, n_forecasts, -1) + rate_adjustment  # (B, T, 1)
+            # Get delta and gamma for each series
+            delta_selected = self.delta[param_indices]  # (B, n_changepoints)
+            gamma_selected = self.gamma[param_indices]  # (B, n_changepoints)
             
-            # Compute offset adjustment m(t) = m + a(t)^T γ
-            gamma = self._compute_gamma()
-            if gamma is not None:
-                offset_adjustment = torch.matmul(indicators, gamma)
-                m_t = m.expand(-1, n_forecasts, -1) + offset_adjustment
-            else:
-                m_t = m.expand(-1, n_forecasts, -1)
-        else:
-            k_t = k.expand(-1, n_forecasts, -1)  # (B, T, 1)
-            m_t = m.expand(-1, n_forecasts, -1)  # (B, T, 1)
+            # Compute changepoint indicators
+            # t_reshaped: (B, T, 1), changepoints_t: (n_changepoints,)
+            indicators = (t_reshaped >= self.changepoints_t.view(1, 1, -1)).float()  # (B, T, C)
+            
+            # Apply adjustments
+            # Sum over changepoints: (B, T, C) @ (B, C, 1) -> (B, T, 1)
+            delta_adjustments = torch.bmm(indicators, delta_selected.unsqueeze(-1))
+            gamma_adjustments = torch.bmm(indicators, gamma_selected.unsqueeze(-1))
+            
+            k_t = k_t + delta_adjustments
+            m_t = m_t + gamma_adjustments
         
-        # Compute logistic function:
-        # g(t) = floor + (cap - floor) / (1 + exp(-k(t) * (t - m(t))))
-        exponent = -k_t * (t_expanded - m_t)  # (B, T, 1)
+        # Compute logistic function
+        # exponent = -k_t * (t_reshaped - m_t)
+        exponent = -k_t * (t_reshaped - m_t)
         
-        # Clip exponent to avoid numerical overflow
-        exponent = torch.clamp(exponent, -20, 20)
+        # Clip to avoid numerical issues (Prophet uses ±10)
+        exponent = torch.clamp(exponent, -10, 10)
         
         logistic_term = 1.0 / (1.0 + torch.exp(exponent))  # (B, T, 1)
         
         # Apply floor and cap
-        trend = floor.expand(-1, n_forecasts, -1) + \
-                (cap - floor).expand(-1, n_forecasts, -1) * logistic_term  # (B, T, 1)
+        trend = floors.expand(-1, n_forecasts, -1) + \
+                (caps - floors).expand(-1, n_forecasts, -1) * logistic_term
         
         # Expand for quantiles if needed
-        if self.config.quantiles and len(self.config.quantiles) > 1:
+        if hasattr(self.config, 'quantiles') and self.config.quantiles:
             n_quantiles = len(self.config.quantiles)
-            trend = trend.expand(-1, -1, n_quantiles)  # (B, T, Q)
+            trend = trend.expand(-1, -1, n_quantiles)
         
         return trend
     
     @property
     def get_trend_deltas(self):
-        """
-        Return changepoint deltas for regularization.
-        
-        Returns:
-            delta parameter if changepoints exist, else None
-        """
+        """Return changepoint deltas for regularization."""
         if self.delta is not None:
             return lambda: self.delta
         return lambda: None
     
     def add_regularization(self):
-        """
-        Add regularization loss for changepoint parameters.
-        
-        Returns:
-            Regularization loss (scalar tensor)
-        """
+        """Add regularization loss for changepoint parameters."""
         if self.delta is None:
             return torch.tensor(0.0, device=self.device)
         
-        # L1 regularization on delta (sparse changepoint adjustments)
-        # Weight by trend regularization parameter from config
         reg_lambda = getattr(self.config, "trend_reg", 0.0)
-        
         if reg_lambda > 0:
-            return reg_lambda * torch.abs(self.delta).sum()
+            # Mark gamma for update after gradient step
+            if self.delta.grad is not None and torch.any(self.delta.grad != 0):
+                self._gamma_needs_update = True
+            
+            # L1 regularization on delta (matching Prophet)
+            return reg_lambda * torch.sum(torch.abs(self.delta))
         
         return torch.tensor(0.0, device=self.device)
