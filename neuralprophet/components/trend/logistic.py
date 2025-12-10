@@ -1,109 +1,85 @@
 import torch
-import torch.nn as nn
+from torch import nn
 
-from neuralprophet.components.trend import Trend
-from neuralprophet.utils_torch import init_parameter
+class LogisticTrend(nn.Module):
+    def __init__(
+        self,
+        config,
+        id_list,
+        quantiles,
+        num_trends_modelled,
+        n_forecasts,
+        device,
+        cap_dict,
+        floor_dict,
+    ):
+        super().__init__()
+        self.device = device
+        self.config = config
+        self.id_list = id_list
+        self.id_to_idx = {id_name: i for i, id_name in enumerate(id_list)}
 
-from typing import List, Dict, Optional
+        # store per-ID caps/floors as tensors, default if missing
+        caps = []
+        floors = []
+        for id_name in id_list:
+            caps.append(cap_dict.get(id_name, 1.0))
+            floors.append(floor_dict.get(id_name, 0.0))
 
-class LogisticTrend(Trend):
-    """
-    Simple logistic trend, one (k, m) per time series ID.
+        self.cap = nn.Parameter(torch.tensor(caps, dtype=torch.float32, device=device), requires_grad=False)
+        self.floor = nn.Parameter(torch.tensor(floors, dtype=torch.float32, device=device), requires_grad=False)
 
-    g(t) = floor + (cap - floor) / (1 + exp(-k * (t - m)))
-    """
+        # underlying linear/piecewise-linear trend
+        from .trend import GlobalLinearTrend, GlobalPiecewiseLinearTrend  # adjust import if needed
 
-    def __init__(self, config, id_list, quantiles, num_trends_modelled, n_forecasts, device):
-        super().__init__(
-            config=config,
-            n_forecasts=n_forecasts,
-            num_trends_modelled=num_trends_modelled,
-            quantiles=quantiles,
+        base_trend_cls = GlobalLinearTrend if int(config.n_changepoints) == 0 else GlobalPiecewiseLinearTrend
+
+        # IMPORTANT: pass same config but treat growth as 'linear' internally
+        lin_config = copy.copy(config)
+        lin_config.growth = "linear"
+
+        self.base_trend = base_trend_cls(
+            config=lin_config,
             id_list=id_list,
+            quantiles=quantiles,
+            num_trends_modelled=num_trends_modelled,
+            n_forecasts=n_forecasts,
             device=device,
         )
-        # Trend_k0  parameter.
-        # dimensions - [no. of quantiles,  num_trends_modelled, trend coeff shape]
-        self.trend_k0 = init_parameter(dims=([len(self.quantiles)] + [self.num_trends_modelled] + [1]))
 
-        # ---- Prepare cap / floor per ID ----
-        # config.cap and config.floor are dicts {id_name: value}
-        cap_values = []
-        floor_values = []
-
-        for id_name in id_list:
-            cap_val = 1.0
-            floor_val = 0.0
-            if config.cap is not None and id_name in config.cap:
-                cap_val = float(config.cap[id_name])
-            if config.floor is not None and id_name in config.floor:
-                floor_val = float(config.floor[id_name])
-            cap_values.append(cap_val)
-            floor_values.append(floor_val)
-
-        cap_tensor = torch.tensor(cap_values, dtype=torch.float32, device=device)
-        floor_tensor = torch.tensor(floor_values, dtype=torch.float32, device=device)
-
-        # store as non-trainable buffers
-        self.register_buffer("cap", cap_tensor)
-        self.register_buffer("floor", floor_tensor)
-
-        # ---- Learnable k and m per ID (1 quantile only for now) ----
-        # shape: (num_trends_modelled,)
-        self.k = nn.Parameter(torch.zeros(num_trends_modelled, dtype=torch.float32, device=device))
-        self.m = nn.Parameter(torch.zeros(num_trends_modelled, dtype=torch.float32, device=device))
-
-    def _id_one_hot(self, df_names: List[str]) -> torch.Tensor:
-        """Convert list of df_name strings into one-hot tensor of shape (batch, num_trends_modelled)."""
-        batch_size = len(df_names)
-        one_hot = torch.zeros(batch_size, self.num_trends_modelled, device=self.device)
-        id_index = {name: i for i, name in enumerate(self.id_list)}
-        for i, name in enumerate(df_names):
-            one_hot[i, id_index[name]] = 1.0
-        return one_hot
-
-    def forward(self, t: torch.Tensor, meta: Dict) -> torch.Tensor:
+    def forward(self, t, id_idx=None):
         """
         Parameters
         ----------
         t : torch.Tensor
-            normalized time, shape (batch, n_forecasts)
-        meta : dict
-            must contain 'df_name': list[str] of length batch
+            normalized time index, shape [batch, n_lags + n_forecasts]
+        id_idx : torch.Tensor or None
+            indices of IDs in `id_list` for each row in t. Shape [batch]
 
         Returns
         -------
-        torch.Tensor
-            logistic trend, same shape as t
+        trend : torch.Tensor
+            logistic trend, shape [batch, n_forecasts] (or similar to base_trend)
         """
-        df_names: List[str] = meta["df_name"]
-        batch, n_forecasts = t.shape
+        # latent linear trend (unbounded)
+        z = self.base_trend(t, id_idx=id_idx)
 
-        # one-hot(df_name) -> (batch, num_trends_modelled)
-        one_hot = self._id_one_hot(df_names)
+        # pick per-row cap/floor
+        if id_idx is None:
+            # single ID case
+            cap = self.cap[0]
+            floor = self.floor[0]
+        else:
+            cap = self.cap[id_idx]
+            floor = self.floor[id_idx]
 
-        # Select per-sample parameters:
-        # each: (batch,)
-        k = (one_hot @ self.k)                  # growth rate per sample
-        m = (one_hot @ self.m)                  # offset per sample
-        cap = (one_hot @ self.cap)              # cap per sample (constant over time)
-        floor = (one_hot @ self.floor)          # floor per sample
+        # ensure shapes are broadcastable
+        while cap.dim() < z.dim():
+            cap = cap.unsqueeze(-1)
+            floor = floor.unsqueeze(-1)
 
-        # reshape to (batch, n_forecasts)
-        k = k.unsqueeze(1).expand(batch, n_forecasts)
-        m = m.unsqueeze(1).expand(batch, n_forecasts)
-        cap = cap.unsqueeze(1).expand(batch, n_forecasts)
-        floor = floor.unsqueeze(1).expand(batch, n_forecasts)
-
-        C = cap - floor   # "capacity" in current scale
-
-        # Logistic growth
-        # g(t) = floor + C / (1 + exp(-k * (t - m)))
-        trend = floor + C / (1.0 + torch.exp(-k * (t - m)))
-
-        # If you use quantiles > 1, you'll need to extend the last dimension.
-        # For now, we assume a single central quantile.
-        return trend
+        # logistic transform: [floor, cap]
+        return floor + torch.sigmoid(z) * (cap - floor)
 
     # required abstract methods from Trend base:
     
