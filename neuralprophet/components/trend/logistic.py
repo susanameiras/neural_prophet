@@ -25,8 +25,8 @@ class LogisticTrend(nn.Module):
         caps = []
         floors = []
         for id_name in id_list:
-            caps.append(float(cap_dict.get(id_, 1.0)))
-            floors.append(float(floor_dict.get(id_, 0.0)))
+            caps.append(float(cap_dict.get(id_name, 1.0)))
+            floors.append(float(floor_dict.get(id_name, 0.0)))
 
         self.register_buffer(
             "cap",
