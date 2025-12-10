@@ -4,6 +4,7 @@ import torch.nn as nn
 from neuralprophet.components.trend import Trend
 from neuralprophet.utils_torch import init_parameter
 
+from typing import List, Dict, Optional
 
 class LogisticTrend(Trend):
     """
